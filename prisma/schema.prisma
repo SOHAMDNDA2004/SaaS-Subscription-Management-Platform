@@ -1,0 +1,158 @@
+// Prisma Schema for PostgreSQL SaaS Subscription Management Platform
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  UNPAID
+  INCOMPLETE
+}
+
+enum BillingCycle {
+  MONTHLY
+  YEARLY
+}
+
+enum InvoiceStatus {
+  DRAFT
+  OPEN
+  PAID
+  UNCOLLECTIBLE
+  VOID
+}
+
+model User {
+  id               String         @id @default(uuid())
+  email            String         @unique
+  name             String?
+  role             Role           @default(USER)
+  company          String?
+  avatarUrl        String?
+  stripeCustomerId String?        @unique
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  subscriptions    Subscription[]
+  invoices         Invoice[]
+  usageRecords     UsageRecord[]
+  auditLogs        AuditLog[]
+
+  @@index([email])
+  @@index([stripeCustomerId])
+}
+
+model Plan {
+  id                   String         @id @default(uuid())
+  name                 String         @unique // Starter, Pro, Enterprise
+  slug                 String         @unique // starter, pro, enterprise
+  description          String
+  priceMonthly         Int            // In cents (e.g., 2900 = $29.00)
+  priceYearly          Int            // In cents (e.g., 29000 = $290.00)
+  stripePriceIdMonthly String?
+  stripePriceIdYearly  String?
+  stripeProductId      String?
+  features             String[]       // List of features
+  limits               Json           // { apiCalls: 10000, teamSeats: 3, storageGb: 10, projects: 5 }
+  isPopular            Boolean        @default(false)
+  isActive             Boolean        @default(true)
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  subscriptions        Subscription[]
+}
+
+model Subscription {
+  id                   String             @id @default(uuid())
+  userId               String
+  planId               String
+  stripeSubscriptionId String?            @unique
+  stripePriceId        String?
+  status               SubscriptionStatus @default(ACTIVE)
+  billingCycle         BillingCycle       @default(MONTHLY)
+  currentPeriodStart   DateTime           @default(now())
+  currentPeriodEnd     DateTime
+  cancelAtPeriodEnd    Boolean            @default(false)
+  canceledAt           DateTime?
+  trialStart           DateTime?
+  trialEnd             DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  user                 User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan                 Plan               @relation(fields: [planId], references: [id])
+  invoices             Invoice[]
+
+  @@index([userId])
+  @@index([planId])
+  @@index([stripeSubscriptionId])
+}
+
+model Invoice {
+  id                    String        @id @default(uuid())
+  userId                String
+  subscriptionId        String?
+  stripeInvoiceId       String?       @unique
+  stripePaymentIntentId String?
+  number                String        @unique // e.g. "INV-2026-001"
+  amountDue             Int           // in cents
+  amountPaid            Int           // in cents
+  currency              String        @default("usd")
+  status                InvoiceStatus @default(PAID)
+  billingReason         String?       // "subscription_cycle", "subscription_create", "manual"
+  hostedInvoiceUrl      String?
+  invoicePdfUrl         String?
+  paidAt                DateTime?
+  dueDate               DateTime?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  user                  User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscription          Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([stripeInvoiceId])
+}
+
+model UsageRecord {
+  id          String   @id @default(uuid())
+  userId      String
+  metricKey   String   // "api_calls", "storage_gb", "team_seats", "projects"
+  current     Int      @default(0)
+  limit       Int      @default(100)
+  periodStart DateTime @default(now())
+  periodEnd   DateTime
+  updatedAt   DateTime @updatedAt
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, metricKey])
+  @@index([userId])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  action    String   // "SUBSCRIPTION_CREATED", "PLAN_UPGRADED", "WEBHOOK_PROCESSED"
+  details   Json?
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+}
